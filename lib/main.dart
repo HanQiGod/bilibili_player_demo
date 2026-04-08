@@ -170,7 +170,7 @@ class _BilibiliPlayerHomePageState extends State<BilibiliPlayerHomePage> {
         return;
       }
       setState(() {
-        _errorMessage = error.toString();
+        _errorMessage = _describeLoadError(error);
       });
     } finally {
       if (mounted) {
@@ -800,6 +800,17 @@ class _BilibiliPlayerHomePageState extends State<BilibiliPlayerHomePage> {
       return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
     }
     return '${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+  }
+
+  String _describeLoadError(Object error) {
+    if (error is BiliException) {
+      if (error.code == BiliException.codeUnauthorized) {
+        return 'B 站当前返回了登录态校验，未能获取播放地址。已改为免登录获取 WBI 参数，但该视频或当前接口仍可能要求登录。';
+      }
+      return 'B 站接口异常（code: ${error.code}）：${error.message}';
+    }
+
+    return error.toString();
   }
 }
 

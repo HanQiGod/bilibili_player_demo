@@ -74,7 +74,6 @@ class BilibiliDemoService {
   final BiliHttpClient _client;
   final http.Client _httpClient;
 
-  late final LoginInfoApi _loginInfoApi = LoginInfoApi(_client);
   late final VideoApi _videoApi = VideoApi(_client);
   late final VideoStreamApi _streamApi = VideoStreamApi(_client);
 
@@ -103,7 +102,7 @@ class BilibiliDemoService {
     final safeIndex = pageIndex.clamp(0, videoInfo.pages.length - 1);
     final page = videoInfo.pages[safeIndex];
 
-    await _loginInfoApi.refreshWbiKeys();
+    await _ensureWbiKeys();
 
     final playbackFuture = _resolvePlaybackSource(id: id, cid: page.cid);
     final danmakuFuture = _loadDanmaku(page.cid);
@@ -125,6 +124,44 @@ class BilibiliDemoService {
   void dispose() {
     _client.close();
     _httpClient.close();
+  }
+
+  Future<void> _ensureWbiKeys() async {
+    final signer = _client.wbiSigner;
+    if (!signer.needsRefresh && signer.mixinKey != null) {
+      return;
+    }
+
+    final response = await _httpClient.get(
+      Uri.parse('https://api.bilibili.com/x/web-interface/nav'),
+      headers: playbackHeaders,
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw StateError('获取 WBI 签名参数失败: ${response.statusCode}');
+    }
+
+    final raw = json.decode(utf8.decode(response.bodyBytes));
+    if (raw is! Map) {
+      throw const FormatException('WBI 接口返回格式无效。');
+    }
+
+    final data = raw['data'];
+    if (data is! Map) {
+      throw StateError('WBI 接口缺少 data 字段。');
+    }
+
+    final wbiImg = data['wbi_img'];
+    if (wbiImg is! Map) {
+      throw StateError('WBI 接口缺少 wbi_img 字段。');
+    }
+
+    final imgUrl = wbiImg['img_url'] as String?;
+    final subUrl = wbiImg['sub_url'] as String?;
+    if (imgUrl == null || imgUrl.isEmpty || subUrl == null || subUrl.isEmpty) {
+      throw StateError('WBI 接口返回的签名参数不完整。');
+    }
+
+    signer.updateKeys(imgUrl, subUrl);
   }
 
   Future<_ResolvedPlayback> _resolvePlaybackSource({
