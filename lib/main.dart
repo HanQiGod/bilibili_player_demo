@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:bilibili_api/bilibili_api.dart';
 import 'package:flutter/material.dart';
@@ -687,37 +688,72 @@ class _BilibiliPlayerHomePageState extends State<BilibiliPlayerHomePage> {
   }
 
   Widget _buildEmptyPlayerPlaceholder() {
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          colors: [Color(0xFF141820), Color(0xFF29131B)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-      ),
-      padding: const EdgeInsets.all(28),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: const [
-          Icon(
-            Icons.ondemand_video_outlined,
-            size: 72,
-            color: Color(0xFFFFB7CC),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact =
+            constraints.maxHeight < 190 || constraints.maxWidth < 360;
+        final padding = compact ? 18.0 : 28.0;
+        final iconSize = compact ? 52.0 : 72.0;
+        final titleFontSize = compact ? 16.0 : 20.0;
+        final bodyFontSize = compact ? 12.0 : 14.0;
+        final titleGap = compact ? 12.0 : 16.0;
+        final bodyGap = compact ? 8.0 : 10.0;
+        final contentWidth = math.max(0.0, constraints.maxWidth - padding * 2);
+
+        return Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [Color(0xFF141820), Color(0xFF29131B)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
           ),
-          SizedBox(height: 16),
-          Text(
-            '输入一个 B 站视频并点击“加载并播放”',
-            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
-            textAlign: TextAlign.center,
+          padding: EdgeInsets.all(padding),
+          child: Center(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: contentWidth),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.ondemand_video_outlined,
+                      size: iconSize,
+                      color: const Color(0xFFFFB7CC),
+                    ),
+                    SizedBox(height: titleGap),
+                    SizedBox(
+                      width: contentWidth,
+                      child: Text(
+                        '输入一个 B 站视频并点击“加载并播放”',
+                        style: TextStyle(
+                          fontSize: titleFontSize,
+                          fontWeight: FontWeight.w700,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                    SizedBox(height: bodyGap),
+                    SizedBox(
+                      width: contentWidth,
+                      child: Text(
+                        '播放器会自动获取视频地址，并叠加官方 XML 弹幕。',
+                        style: TextStyle(
+                          color: Colors.white70,
+                          height: 1.5,
+                          fontSize: bodyFontSize,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
-          SizedBox(height: 10),
-          Text(
-            '播放器会自动获取视频地址，并叠加官方 XML 弹幕。',
-            style: TextStyle(color: Colors.white70, height: 1.5),
-            textAlign: TextAlign.center,
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
