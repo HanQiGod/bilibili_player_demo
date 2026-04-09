@@ -54,7 +54,8 @@ class BilibiliPlayerHomePage extends StatefulWidget {
 }
 
 class _BilibiliPlayerHomePageState extends State<BilibiliPlayerHomePage> {
-  static const _exampleVideoId = 'BV1xx411c79H';
+  static const _exampleVideoId = 'BV17frgYBE7v';
+  static const _playerOpenTimeout = Duration(seconds: 8);
 
   final _service = BilibiliDemoService();
   final _player = Player(
@@ -152,7 +153,7 @@ class _BilibiliPlayerHomePageState extends State<BilibiliPlayerHomePage> {
       );
 
       _resetDanmaku(bundle.danmakuItems);
-      await _player.open(bundle.media);
+      final source = await _openPlaybackSources(bundle.sources);
 
       if (!mounted) {
         return;
@@ -162,8 +163,8 @@ class _BilibiliPlayerHomePageState extends State<BilibiliPlayerHomePage> {
         _currentVideoId = parsed;
         _videoInfo = info;
         _selectedPageIndex = pageIndex.clamp(0, info.pages.length - 1);
-        _sourceLabel = bundle.sourceLabel;
-        _qualityText = bundle.stream.acceptDescription.join(' / ');
+        _sourceLabel = source.sourceLabel;
+        _qualityText = source.stream.acceptDescription.join(' / ');
       });
     } catch (error) {
       if (!mounted) {
@@ -179,6 +180,35 @@ class _BilibiliPlayerHomePageState extends State<BilibiliPlayerHomePage> {
         });
       }
     }
+  }
+
+  Future<PlaybackSource> _openPlaybackSources(
+    List<PlaybackSource> sources,
+  ) async {
+    if (sources.isEmpty) {
+      throw StateError('没有可尝试的播放源。');
+    }
+
+    Object? lastError;
+    for (final source in sources) {
+      try {
+        await _player.open(source.media).timeout(_playerOpenTimeout);
+        return source;
+      } catch (error) {
+        lastError = error;
+        try {
+          await _player.stop();
+        } catch (_) {}
+      }
+    }
+
+    final triedSources = sources
+        .map((source) => source.sourceLabel)
+        .join(' / ');
+    throw StateError(
+      '播放器打开超时或失败，已尝试：$triedSources。'
+      '${lastError == null ? '' : '最后错误：$lastError'}',
+    );
   }
 
   void _resetDanmaku(List<DanmakuItem> items) {
@@ -803,6 +833,9 @@ class _BilibiliPlayerHomePageState extends State<BilibiliPlayerHomePage> {
   }
 
   String _describeLoadError(Object error) {
+    if (error is TimeoutException) {
+      return '播放器打开超时，请稍后重试。';
+    }
     if (error is BiliException) {
       if (error.code == BiliException.codeUnauthorized) {
         return 'B 站当前返回了登录态校验，未能获取播放地址。已改为免登录获取 WBI 参数，但该视频或当前接口仍可能要求登录。';

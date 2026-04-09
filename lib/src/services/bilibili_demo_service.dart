@@ -53,18 +53,26 @@ class ParsedVideoId {
 
 class PlaybackBundle {
   const PlaybackBundle({
-    required this.media,
+    required this.sources,
     required this.page,
-    required this.stream,
-    required this.sourceLabel,
     required this.danmakuItems,
   });
 
-  final Media media;
+  final List<PlaybackSource> sources;
   final VideoPage page;
+  final List<DanmakuItem> danmakuItems;
+}
+
+class PlaybackSource {
+  const PlaybackSource({
+    required this.media,
+    required this.stream,
+    required this.sourceLabel,
+  });
+
+  final Media media;
   final VideoStreamUrl stream;
   final String sourceLabel;
-  final List<DanmakuItem> danmakuItems;
 }
 
 class BilibiliDemoService {
@@ -105,19 +113,17 @@ class BilibiliDemoService {
 
     await _ensureWbiKeys();
 
-    final playbackFuture = _resolvePlaybackSource(id: id, cid: page.cid);
+    final playbackFuture = _resolvePlaybackSources(id: id, cid: page.cid);
     final danmakuFuture = _loadDanmaku(page.cid);
 
-    final playback = await playbackFuture;
+    final sources = await playbackFuture;
     final danmakuItems = await danmakuFuture.catchError((_) {
       return <DanmakuItem>[];
     });
 
     return PlaybackBundle(
-      media: playback.media,
+      sources: sources,
       page: page,
-      stream: playback.stream,
-      sourceLabel: playback.sourceLabel,
       danmakuItems: danmakuItems,
     );
   }
@@ -165,11 +171,19 @@ class BilibiliDemoService {
     signer.updateKeys(imgUrl, subUrl);
   }
 
-  Future<_ResolvedPlayback> _resolvePlaybackSource({
+  Future<List<PlaybackSource>> _resolvePlaybackSources({
     required ParsedVideoId id,
     required int cid,
   }) async {
     Object? lastError;
+    final sources = <PlaybackSource>[];
+    final seenLabels = <String>{};
+
+    void addSource(PlaybackSource source) {
+      if (seenLabels.add(source.sourceLabel)) {
+        sources.add(source);
+      }
+    }
 
     for (final qn in const [32, 16]) {
       try {
@@ -177,18 +191,18 @@ class BilibiliDemoService {
         final stream = VideoStreamUrl.fromJson(raw);
         final media = await _buildDashMedia(raw);
         if (media != null) {
-          return _ResolvedPlayback(
-            media: media,
-            stream: stream,
-            sourceLabel: 'DASH · ${_describeQuality(stream)}',
+          addSource(
+            PlaybackSource(
+              media: media,
+              stream: stream,
+              sourceLabel: 'DASH · ${_describeQuality(stream)}',
+            ),
           );
         }
       } catch (error) {
         lastError = error;
       }
-    }
 
-    for (final qn in const [32, 16]) {
       try {
         final stream = await _streamApi.getMp4Stream(
           bvid: id.bvid,
@@ -200,14 +214,20 @@ class BilibiliDemoService {
         if (firstUrl == null || firstUrl.isEmpty) {
           continue;
         }
-        return _ResolvedPlayback(
-          media: Media(firstUrl, httpHeaders: playbackHeaders),
-          stream: stream,
-          sourceLabel: 'MP4 · ${_describeQuality(stream)}',
+        addSource(
+          PlaybackSource(
+            media: Media(firstUrl, httpHeaders: playbackHeaders),
+            stream: stream,
+            sourceLabel: 'MP4 · ${_describeQuality(stream)}',
+          ),
         );
       } catch (error) {
         lastError = error;
       }
+    }
+
+    if (sources.isNotEmpty) {
+      return sources;
     }
 
     throw StateError('未获取到可播放地址: ${lastError ?? '未知错误'}');
@@ -620,18 +640,6 @@ class BilibiliDemoService {
         .replaceAll('"', '&quot;')
         .replaceAll("'", '&apos;');
   }
-}
-
-class _ResolvedPlayback {
-  const _ResolvedPlayback({
-    required this.media,
-    required this.stream,
-    required this.sourceLabel,
-  });
-
-  final Media media;
-  final VideoStreamUrl stream;
-  final String sourceLabel;
 }
 
 class _DashSegmentBase {
