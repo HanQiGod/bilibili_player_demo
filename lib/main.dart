@@ -56,7 +56,7 @@ class BilibiliPlayerHomePage extends StatefulWidget {
 class _BilibiliPlayerHomePageState extends State<BilibiliPlayerHomePage> {
   // static const _exampleVideoId = 'BV1xx411c79H';
   static const _exampleVideoId = 'BV17frgYBE7v';
-  static const _playerOpenTimeout = Duration(seconds: 8);
+  static const _playerStartTimeout = Duration(seconds: 15);
 
   final _service = BilibiliDemoService();
   final _player = Player(
@@ -193,13 +193,15 @@ class _BilibiliPlayerHomePageState extends State<BilibiliPlayerHomePage> {
     Object? lastError;
     for (final source in sources) {
       try {
-        await _player.open(source.media).timeout(_playerOpenTimeout);
+        await _player.open(source.media);
+        await _waitForPlaybackReady();
         return source;
       } catch (error) {
         lastError = error;
         try {
           await _player.stop();
         } catch (_) {}
+        await Future<void>.delayed(const Duration(milliseconds: 250));
       }
     }
 
@@ -210,6 +212,82 @@ class _BilibiliPlayerHomePageState extends State<BilibiliPlayerHomePage> {
       '播放器打开超时或失败，已尝试：$triedSources。'
       '${lastError == null ? '' : '最后错误：$lastError'}',
     );
+  }
+
+  Future<void> _waitForPlaybackReady() async {
+    if (_isPlaybackReady()) {
+      return;
+    }
+
+    final completer = Completer<void>();
+    StreamSubscription<Duration>? positionSubscription;
+    StreamSubscription<Duration>? durationSubscription;
+    StreamSubscription<int?>? widthSubscription;
+    StreamSubscription<int?>? heightSubscription;
+    StreamSubscription<String>? errorSubscription;
+
+    void succeed() {
+      if (!completer.isCompleted) {
+        completer.complete();
+      }
+    }
+
+    void fail(Object error) {
+      if (!completer.isCompleted) {
+        completer.completeError(error);
+      }
+    }
+
+    positionSubscription = _player.stream.position.listen((_) {
+      if (_isPlaybackReady()) {
+        succeed();
+      }
+    });
+    durationSubscription = _player.stream.duration.listen((_) {
+      if (_isPlaybackReady()) {
+        succeed();
+      }
+    });
+    widthSubscription = _player.stream.width.listen((_) {
+      if (_isPlaybackReady()) {
+        succeed();
+      }
+    });
+    heightSubscription = _player.stream.height.listen((_) {
+      if (_isPlaybackReady()) {
+        succeed();
+      }
+    });
+    errorSubscription = _player.stream.error.listen((message) {
+      fail(StateError(message));
+    });
+
+    try {
+      await completer.future.timeout(
+        _playerStartTimeout,
+        onTimeout: () => throw TimeoutException('等待播放器开始播放超时。'),
+      );
+    } finally {
+      await positionSubscription.cancel();
+      await durationSubscription.cancel();
+      await widthSubscription.cancel();
+      await heightSubscription.cancel();
+      await errorSubscription.cancel();
+    }
+  }
+
+  bool _isPlaybackReady() {
+    final state = _player.state;
+    if (state.position > Duration.zero) {
+      return true;
+    }
+    if (state.duration > Duration.zero) {
+      return true;
+    }
+    if (state.width != null || state.height != null) {
+      return true;
+    }
+    return false;
   }
 
   void _resetDanmaku(List<DanmakuItem> items) {

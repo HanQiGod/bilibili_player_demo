@@ -187,23 +187,6 @@ class BilibiliDemoService {
 
     for (final qn in const [32, 16]) {
       try {
-        final raw = await _getPlayUrlRaw(id: id, cid: cid, qn: qn, fnval: 4048);
-        final stream = VideoStreamUrl.fromJson(raw);
-        final media = await _buildDashMedia(raw);
-        if (media != null) {
-          addSource(
-            PlaybackSource(
-              media: media,
-              stream: stream,
-              sourceLabel: 'DASH · ${_describeQuality(stream)}',
-            ),
-          );
-        }
-      } catch (error) {
-        lastError = error;
-      }
-
-      try {
         final stream = await _streamApi.getMp4Stream(
           bvid: id.bvid,
           aid: id.aid,
@@ -221,6 +204,23 @@ class BilibiliDemoService {
             sourceLabel: 'MP4 · ${_describeQuality(stream)}',
           ),
         );
+      } catch (error) {
+        lastError = error;
+      }
+
+      try {
+        final raw = await _getPlayUrlRaw(id: id, cid: cid, qn: qn, fnval: 4048);
+        final stream = VideoStreamUrl.fromJson(raw);
+        final media = await _buildDashMedia(raw);
+        if (media != null) {
+          addSource(
+            PlaybackSource(
+              media: media,
+              stream: stream,
+              sourceLabel: 'DASH · ${_describeQuality(stream)}',
+            ),
+          );
+        }
       } catch (error) {
         lastError = error;
       }
@@ -611,7 +611,12 @@ class BilibiliDemoService {
   }
 
   String _describeQuality(VideoStreamUrl stream) {
+    final qualities = stream.acceptQuality;
     final descriptions = stream.acceptDescription;
+    final index = qualities.indexOf(stream.quality);
+    if (index >= 0 && index < descriptions.length) {
+      return descriptions[index];
+    }
     if (descriptions.isEmpty) {
       return '${stream.quality}P';
     }
