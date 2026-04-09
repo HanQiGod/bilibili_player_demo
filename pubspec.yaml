@@ -31,6 +31,7 @@ dependencies:
   flutter:
     sdk: flutter
 
+  archive: ^4.0.9
   bilibili_api: ^0.0.1
   http: ^1.5.0
   media_kit: ^1.2.6

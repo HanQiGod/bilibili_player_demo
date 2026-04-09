@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:archive/archive.dart';
 import 'package:bilibili_api/bilibili_api.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
@@ -140,7 +141,7 @@ class BilibiliDemoService {
       throw StateError('获取 WBI 签名参数失败: ${response.statusCode}');
     }
 
-    final raw = json.decode(utf8.decode(response.bodyBytes));
+    final raw = json.decode(_decodeResponseText(response));
     if (raw is! Map) {
       throw const FormatException('WBI 接口返回格式无效。');
     }
@@ -245,17 +246,21 @@ class BilibiliDemoService {
     }
 
     final dashMap = Map<String, dynamic>.from(dash);
-    final videoStreams = _readMapList(dashMap['video']);
-    final audioStreams = _readMapList(dashMap['audio']);
+    final preferredQuality =
+        (raw['quality'] as num?)?.toInt() ??
+        (dashMap['quality'] as num?)?.toInt();
+    final videoStreams = _readDashCandidates(_readMapList(dashMap['video']));
+    final audioStreams = _readDashCandidates(_readMapList(dashMap['audio']));
     if (videoStreams.isEmpty || audioStreams.isEmpty) {
       return null;
     }
 
-    final video = videoStreams.first;
-    final audio = audioStreams.first;
-    final videoSegment = _parseSegmentBase(video);
-    final audioSegment = _parseSegmentBase(audio);
-    if (videoSegment == null || audioSegment == null) {
+    final video = _selectVideoCandidate(
+      videoStreams,
+      preferredQuality: preferredQuality,
+    );
+    final audio = _selectAudioCandidate(audioStreams);
+    if (video == null || audio == null) {
       return null;
     }
 
@@ -264,10 +269,10 @@ class BilibiliDemoService {
         ((raw['timelength'] as num?)?.toDouble() ?? 0) / 1000;
     final mpd = _buildMpd(
       durationSeconds: durationSeconds,
-      video: video,
-      audio: audio,
-      videoSegment: videoSegment,
-      audioSegment: audioSegment,
+      video: video.data,
+      audio: audio.data,
+      videoSegment: video.segmentBase,
+      audioSegment: audio.segmentBase,
     );
 
     final manifest = await Media.memory(
@@ -288,7 +293,10 @@ class BilibiliDemoService {
       throw StateError('弹幕接口返回异常: ${response.statusCode}');
     }
 
-    final document = XmlDocument.parse(utf8.decode(response.bodyBytes));
+    final document = _parseDanmakuDocument(response);
+    if (document == null) {
+      return const [];
+    }
     final items = <DanmakuItem>[];
 
     for (final node in document.findAllElements('d')) {
@@ -324,6 +332,61 @@ class BilibiliDemoService {
     return items;
   }
 
+  XmlDocument? _parseDanmakuDocument(http.Response response) {
+    try {
+      final xmlText = _sanitizeXml(_decodeResponseText(response));
+      return XmlDocument.parse(xmlText);
+    } on XmlParserException {
+      return null;
+    } on FormatException {
+      return null;
+    }
+  }
+
+  String _decodeResponseText(http.Response response) {
+    final encodings =
+        response.headers['content-encoding']
+            ?.split(',')
+            .map((value) => value.trim().toLowerCase())
+            .where((value) => value.isNotEmpty)
+            .toList(growable: false) ??
+        const <String>[];
+
+    var bytes = response.bodyBytes;
+    for (final encoding in encodings.reversed) {
+      bytes = _decodeBodyBytes(bytes, encoding);
+    }
+    return utf8.decode(bytes, allowMalformed: true);
+  }
+
+  Uint8List _decodeBodyBytes(Uint8List bytes, String encoding) {
+    try {
+      switch (encoding) {
+        case 'gzip':
+        case 'x-gzip':
+          return Uint8List.fromList(GZipDecoder().decodeBytes(bytes));
+        case 'deflate':
+          return Uint8List.fromList(_decodeDeflate(bytes));
+        default:
+          return bytes;
+      }
+    } catch (_) {
+      return bytes;
+    }
+  }
+
+  List<int> _decodeDeflate(List<int> bytes) {
+    try {
+      return ZLibDecoder().decodeBytes(bytes);
+    } catch (_) {
+      return ZLibDecoder().decodeBytes(bytes, raw: true);
+    }
+  }
+
+  String _sanitizeXml(String value) {
+    return value.replaceAll(RegExp(r'[\x00-\x08\x0B\x0C\x0E-\x1F]'), '');
+  }
+
   List<Map<String, dynamic>> _readMapList(dynamic value) {
     if (value is! List) {
       return const [];
@@ -333,6 +396,135 @@ class BilibiliDemoService {
         .whereType<Map>()
         .map((item) => Map<String, dynamic>.from(item))
         .toList(growable: false);
+  }
+
+  List<_DashStreamCandidate> _readDashCandidates(
+    List<Map<String, dynamic>> streams,
+  ) {
+    return streams
+        .map((data) {
+          final segmentBase = _parseSegmentBase(data);
+          if (segmentBase == null) {
+            return null;
+          }
+          return _DashStreamCandidate(data: data, segmentBase: segmentBase);
+        })
+        .whereType<_DashStreamCandidate>()
+        .toList(growable: false);
+  }
+
+  _DashStreamCandidate? _selectVideoCandidate(
+    List<_DashStreamCandidate> candidates, {
+    required int? preferredQuality,
+  }) {
+    if (candidates.isEmpty) {
+      return null;
+    }
+
+    final sorted = [...candidates]
+      ..sort((left, right) {
+        final qualityRank = _videoQualityRank(
+          left.data,
+          preferredQuality,
+        ).compareTo(_videoQualityRank(right.data, preferredQuality));
+        if (qualityRank != 0) {
+          return qualityRank;
+        }
+
+        final codecRank = _videoCodecRank(
+          left.data,
+        ).compareTo(_videoCodecRank(right.data));
+        if (codecRank != 0) {
+          return codecRank;
+        }
+
+        return _readInt(
+          right.data['bandwidth'],
+        ).compareTo(_readInt(left.data['bandwidth']));
+      });
+    return sorted.first;
+  }
+
+  _DashStreamCandidate? _selectAudioCandidate(
+    List<_DashStreamCandidate> candidates,
+  ) {
+    if (candidates.isEmpty) {
+      return null;
+    }
+
+    final sorted = [...candidates]
+      ..sort((left, right) {
+        final codecRank = _audioCodecRank(
+          left.data,
+        ).compareTo(_audioCodecRank(right.data));
+        if (codecRank != 0) {
+          return codecRank;
+        }
+
+        return _readInt(
+          right.data['bandwidth'],
+        ).compareTo(_readInt(left.data['bandwidth']));
+      });
+    return sorted.first;
+  }
+
+  int _videoQualityRank(Map<String, dynamic> data, int? preferredQuality) {
+    if (preferredQuality == null) {
+      return 0;
+    }
+
+    final quality = _readInt(data['id']);
+    if (quality == preferredQuality) {
+      return 0;
+    }
+    if (quality < preferredQuality) {
+      return (preferredQuality - quality) * 2 - 1;
+    }
+    return (quality - preferredQuality) * 2;
+  }
+
+  int _videoCodecRank(Map<String, dynamic> data) {
+    final codecid = _readInt(data['codecid']);
+    if (codecid == 7) {
+      return 0;
+    }
+    if (codecid == 12) {
+      return 1;
+    }
+    if (codecid == 13) {
+      return 2;
+    }
+
+    final codecs = _readLowerString(data['codecs']);
+    if (codecs.contains('avc1')) {
+      return 0;
+    }
+    if (codecs.contains('hev1') || codecs.contains('hvc1')) {
+      return 1;
+    }
+    if (codecs.contains('av01') || codecs.contains('av1')) {
+      return 2;
+    }
+    return 3;
+  }
+
+  int _audioCodecRank(Map<String, dynamic> data) {
+    final codecs = _readLowerString(data['codecs']);
+    if (codecs.contains('mp4a') || codecs.contains('aac')) {
+      return 0;
+    }
+    return 1;
+  }
+
+  int _readInt(dynamic value) {
+    if (value is num) {
+      return value.toInt();
+    }
+    return int.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
+  String _readLowerString(dynamic value) {
+    return value?.toString().toLowerCase() ?? '';
   }
 
   _DashSegmentBase? _parseSegmentBase(Map<String, dynamic> data) {
@@ -450,6 +642,13 @@ class _DashSegmentBase {
 
   final String initialization;
   final String indexRange;
+}
+
+class _DashStreamCandidate {
+  const _DashStreamCandidate({required this.data, required this.segmentBase});
+
+  final Map<String, dynamic> data;
+  final _DashSegmentBase segmentBase;
 }
 
 extension _NullableFirst<E> on List<E> {
